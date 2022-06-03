@@ -1,2 +1,1 @@
-# SQL
-Repo for all SQL scripts
+# da-reporting
