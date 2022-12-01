@@ -23,5 +23,5 @@ EXIT
 
 REM prune files older than 1 week
 REM --------------------------------------------------
-rem forfiles /S /P "C:\ProgramData\Tableau\Tableau Server\data\tabsvc\files\backups" /m *.json /d -7 /c "cmd /c del /q @file"  
-rem forfiles /S /P "C:\ProgramData\Tableau\Tableau Server\data\tabsvc\files\backups" /m *.tsbak /d -7 /c "cmd /c del /q @file"
+forfiles /S /P "C:\ProgramData\Tableau\Tableau Server\data\tabsvc\files\backups" /m *.json /d -7 /c "cmd /c del /q @file"  
+forfiles /S /P "C:\ProgramData\Tableau\Tableau Server\data\tabsvc\files\backups" /m *.tsbak /d -7 /c "cmd /c del /q @file"
