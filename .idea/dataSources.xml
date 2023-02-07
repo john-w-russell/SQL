@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="DataSourceManagerImpl" format="xml" multifile-model="true">
+    <data-source source="LOCAL" name="da_prod.db@gma34156.snowflakecomputing.com" uuid="92cb8f7a-fc96-4b2c-8ffd-690dbbc8c1a9">
+      <driver-ref>snowflake</driver-ref>
+      <synchronize>true</synchronize>
+      <remarks>Prod</remarks>
+      <jdbc-driver>net.snowflake.client.jdbc.SnowflakeDriver</jdbc-driver>
+      <jdbc-url>jdbc:snowflake://gma34156.snowflakecomputing.com:443?warehouse=prod&amp;db=da_prod.db&amp;role=PROD_DA_ANALYSIS_ROLE</jdbc-url>
+      <jdbc-additional-properties>
+        <property name="authenticator" value="https://synthego.okta.com/" />
+      </jdbc-additional-properties>
+      <working-dir>$ProjectFileDir$</working-dir>
+    </data-source>
+  </component>
+</project>
