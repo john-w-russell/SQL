@@ -2,19 +2,19 @@
 -- use schema analyst_reporting;
 --
 -- create or replace view vw_buckaneer_orders as
-with chosen_cell_lines as (
-    select
-        name
-    from
-        stitch.stitch_buckaneer_prod.product_kocellline
-    )
-, chosen_gene_names as (
-    select distinct
-        symbol
-    from
-        stitch.stitch_buckaneer_prod.product_kodesigndata
-    )
-, web_eligible_products as (
+-- with chosen_cell_lines as (
+--     select
+--         name
+--     from
+--         stitch.stitch_buckaneer_prod.product_kocellline
+--     )
+-- , chosen_gene_names as (
+--     select distinct
+--         symbol
+--     from
+--         stitch.stitch_buckaneer_prod.product_kodesigndata
+--     )
+with web_eligible_products as (
     select distinct
         buckaneer_product_id
         , product_line
