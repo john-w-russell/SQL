@@ -104,6 +104,7 @@ select
           when epi.product_id in (45, 1139, 1176, 1214, 1219)
               then 'Knockout Cell Clone'
           when epi.product_type_json = 'engineered_cell_libraries'
+              or product_name ilike '%library'
               then 'Engineered Cell Libraries'
           else 'Other'
       end                                                                       as product_type
