@@ -154,5 +154,5 @@ select
 from
     extract_product_info                                                        as epi
 where
-    epi.family not in ('EC', 'ADDON_CHARGES')
+    epi.family in ('EC', 'ADDON_CHARGES')
     and epi.estimated_ship_date is not null

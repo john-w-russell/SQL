@@ -1,20 +1,20 @@
--- use database da_prod_db;
--- use schema analyst_reporting;
---
--- create or replace view vw_buckaneer_orders as
--- with chosen_cell_lines as (
---     select
---         name
---     from
---         stitch.stitch_buckaneer_prod.product_kocellline
---     )
--- , chosen_gene_names as (
---     select distinct
---         symbol
---     from
---         stitch.stitch_buckaneer_prod.product_kodesigndata
---     )
-with web_eligible_products as (
+use database da_prod_db;
+use schema analyst_reporting;
+
+create or replace view vw_buckaneer_orders as
+with chosen_cell_lines as (
+    select
+        name
+    from
+        stitch.stitch_buckaneer_prod.product_kocellline
+    )
+, chosen_gene_names as (
+    select distinct
+        symbol
+    from
+        stitch.stitch_buckaneer_prod.product_kodesigndata
+    )
+, web_eligible_products as (
     select distinct
         buckaneer_product_id
         , product_line
@@ -25,8 +25,9 @@ with web_eligible_products as (
         da_prod_db.analyst_reporting.web_store_product_sku
     )
     , buckaneer_orders as (
-    select
+    select distinct
         odg.order_id
+        , oi.id                                                                 as order_item_id
         , upper(pp.family)                                                      as family
         , oi.source_system
         , oo.status
@@ -72,6 +73,7 @@ with web_eligible_products as (
    , extract_product_info as (
     select
         bo.order_id
+        , bo.order_item_id
         , bo.family
         , bo.source_system
         , bo.status
@@ -115,9 +117,98 @@ with web_eligible_products as (
     from
         buckaneer_orders                                                        bo
     )
-, web_eligibility as (
+, web_eligibility_ec as (
     select
         epi.order_id
+        , epi.order_item_id
+        , epi.family                                                            as product_family
+        , epi.source_system
+        , epi.status
+        , epi.order_created
+        , epi.in_process_start_date
+        , epi.estimated_ship_date
+        , epi.actual_ship_date
+        , epi.product_id
+        , epi.product_category_cln                                              as product_category
+        , epi.product_line_cln                                                  as product_line
+        , epi.product_name
+--         , case
+--               when epi.product_id in (40, 44, 1008, 1009, 1010, 1011, 1183, 1187, 1216, 1331)
+--                   then 'KO Cell Pool'
+--               when epi.product_id in (45, 1139, 1176, 1214, 1219)
+--                   then 'KO Cell Clone'
+--               when epi.product_type_json = 'engineered_cell_libraries'
+--                   or epi.product_name like '%LIBRARY'
+--                   then 'ECL'
+--               when epi.product_id in ()
+--                   then 'Standard sgRNA'
+--               when epi.product_name ilike 'crispr custom rna%'
+--                   then 'Custom RNA'
+--               when epi.product_name ilike '%custom library%'
+--                   then 'Custom Libraries'
+--               when epi.sku ilike '%accessory%'
+--                   then 'CR Accessories'
+--               else 'Unknown'
+--           end                                                                   as product_category
+        , epi.product_sku
+        , epi.product_details
+        , epi.units_sold
+        , epi.units_x_net
+        , epi.unit_price_net
+        , epi.unit_price_gross
+        , epi.unit_price_list
+        , epi.shipping_company_name
+        , epi.first_name
+        , epi.last_name
+        , epi.notification_email
+        , epi.country
+        , epi.gene_name
+        , epi.cell_line
+        , epi.cell_source
+        , epi.cell_type
+        , epi.edit_type
+        , epi.is_optimized
+        , epi.item_type_name
+        , epi.cell_modification
+        , epi.cell_population
+        , epi.species
+        , iff(epi.product_id in (
+        select
+            buckaneer_product_id
+        from
+            web_eligible_products
+        )
+                  and epi.species = 'human'
+                  and epi.cell_modification = 'knock_out'
+                  and epi.edit_type = 'single_guide'
+                  and epi.cell_type = 'immortalized'
+                  and epi.cell_source = 'synthego_supplied'
+                  and epi.cell_line in (
+            select
+                name
+            from
+                chosen_cell_lines
+            )
+                  and epi.gene_name in (
+            select
+                symbol
+            from
+                chosen_gene_names
+            )
+        , true
+        , false)                                                                as is_webstore_eligible
+        , iff(epi.source_system = 'webstore', true, false)                      as is_webstore_order
+    from
+        extract_product_info                                                    epi
+    where
+        epi.family = 'EC'
+        and epi.estimated_ship_date is not null
+        and epi.in_process_start_date >= '2021-01-01'
+    )
+, web_eligibility_cr as (
+    select
+        epi.order_id
+        , epi.order_item_id
         , epi.family                                                            as product_family
         , epi.source_system
         , epi.status
@@ -181,8 +272,93 @@ with web_eligible_products as (
     from
         extract_product_info                                                    epi
     where
-        epi.family not in ('EDIT_CREDIT')
+        epi.family not in ('EC', 'EDIT_CREDIT')
         and epi.estimated_ship_date is not null
         and epi.in_process_start_date >= '2021-01-01'
     )
-select * from web_eligibility
+, final_union as (
+    select
+        we_ec.order_id
+        , we_ec.order_item_id
+        , we_ec.product_family
+        , we_ec.source_system
+        , we_ec.status
+        , we_ec.order_created
+        , we_ec.in_process_start_date
+        , we_ec.estimated_ship_date
+        , we_ec.actual_ship_date
+        , we_ec.product_id
+        , we_ec.product_category
+        , we_ec.product_line
+        , we_ec.product_name
+        , we_ec.product_sku
+        , we_ec.product_details
+        , we_ec.units_sold
+        , we_ec.units_x_net
+        , we_ec.unit_price_net
+        , we_ec.unit_price_gross
+        , we_ec.unit_price_list
+        , we_ec.shipping_company_name
+        , we_ec.first_name
+        , we_ec.last_name
+        , we_ec.notification_email
+        , we_ec.country
+        , we_ec.gene_name
+        , we_ec.cell_line
+        , we_ec.cell_source
+        , we_ec.cell_type
+        , we_ec.edit_type
+        , we_ec.is_optimized
+        , we_ec.item_type_name
+        , we_ec.cell_modification
+        , we_ec.cell_population
+        , we_ec.species
+        , we_ec.is_webstore_eligible
+        , we_ec.is_webstore_order
+    from
+        web_eligibility_ec                                                      we_ec
+
+    union all
+
+    select
+        we_cr.order_id
+        , we_cr.order_item_id
+        , we_cr.product_family
+        , we_cr.source_system
+        , we_cr.status
+        , we_cr.order_created
+        , we_cr.in_process_start_date
+        , we_cr.estimated_ship_date
+        , we_cr.actual_ship_date
+        , we_cr.product_id
+        , we_cr.product_category
+        , we_cr.product_line
+        , we_cr.product_name
+        , we_cr.product_sku
+        , we_cr.product_details
+        , we_cr.units_sold
+        , we_cr.units_x_net
+        , we_cr.unit_price_net
+        , we_cr.unit_price_gross
+        , we_cr.unit_price_list
+        , we_cr.shipping_company_name
+        , we_cr.first_name
+        , we_cr.last_name
+        , we_cr.notification_email
+        , we_cr.country
+        , we_cr.gene_name
+        , we_cr.cell_line
+        , we_cr.cell_source
+        , we_cr.cell_type
+        , we_cr.edit_type
+        , we_cr.is_optimized
+        , we_cr.item_type_name
+        , we_cr.cell_modification
+        , we_cr.cell_population
+        , we_cr.species
+        , we_cr.is_webstore_eligible
+        , we_cr.is_webstore_order
+    from
+        web_eligibility_cr                                                      we_cr
+    )
+select * from final_union
