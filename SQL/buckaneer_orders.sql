@@ -1,7 +1,7 @@
-use database da_prod_db;
-use schema analyst_reporting;
-
-create or replace view vw_buckaneer_orders as
+-- use database da_prod_db;
+-- use schema analyst_reporting;
+--
+-- create or replace view vw_buckaneer_orders as
 with chosen_cell_lines as (
     select
         name
@@ -289,7 +289,9 @@ with chosen_cell_lines as (
         , we_ec.actual_ship_date
         , we_ec.product_id
         , we_ec.product_category
-        , we_ec.product_line
+        , iff(we_ec.product_line ilike '%libraries'
+            , 'ECL'
+            , we_ec.product_line)                                               as product_line
         , we_ec.product_name
         , we_ec.product_sku
         , we_ec.product_details
