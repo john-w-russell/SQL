@@ -1,7 +1,8 @@
 /*
-Tracks accounts for each quarter to see if an upsell occurred.
+Tracks every account where the first order is a CR-based order from the day of the first order to current date.
+Cohorts are based on the quarter of the first order made.
 
-Starts with grabbing accounts that started with a CR order (removes accounts with no orders or where EC was the first order type)
+Need to add netsuite bookings data for top paying customers.
  */
 
 -- use database da_prod_db;
@@ -51,6 +52,9 @@ with categorized_orders as (
         sfa.id                                                                  as account_id
         , dim_dates.date                                                        as dte
         , sfa.name                                                              as account_name
+        , 'https://synthego.lightning.force.com/lightning/r/Account/' ||
+          sfa.id ||
+          '/view'                                                               as salesforce_url
         , sfa.createddate                                                       as account_created_at
 --         , to_varchar(date_part(year, sfa.createddate))
 --         ||
@@ -89,6 +93,7 @@ with categorized_orders as (
         account_spine.dte
         , account_spine.account_id
         , account_spine.account_name
+        , account_spine.salesforce_url
         , account_spine.account_created_at
 --         , account_spine.customer_cohort
         , account_spine.accountsource
@@ -120,6 +125,7 @@ with categorized_orders as (
         accounts_with_orders.dte
         , accounts_with_orders.account_id
         , accounts_with_orders.account_name
+        , accounts_with_orders.salesforce_url
         , accounts_with_orders.account_created_at
 --         , accounts_with_orders.customer_cohort
         , accounts_with_orders.accountsource
@@ -162,6 +168,7 @@ select
     accounts_daily.dte
     , accounts_daily.account_id
     , accounts_daily.account_name
+    , accounts_daily.salesforce_url
     , accounts_daily.account_created_at
     , to_varchar(date_part(year
             , accounts_daily.first_cr_ordered_at))
@@ -192,6 +199,11 @@ select
             , true
             , false)                                                            as is_upsold
     , accounts_daily.first_ec_ordered_at                                        as upsold_at
+    , count(case
+                when accounts_daily.order_type = 'CR'
+                and accounts_daily.dte < accounts_daily.first_ec_ordered_at
+                    then accounts_daily.order_created_at_pst end) over
+            (partition by accounts_daily.account_id)                            as num_cr_orders_before_ec_order
     , conditional_true_event((accounts_daily.dte <
                                  to_date(accounts_daily.first_ec_ordered_at)
                               or accounts_daily.first_ec_ordered_at is null)

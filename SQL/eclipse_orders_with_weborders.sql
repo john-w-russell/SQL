@@ -133,7 +133,7 @@ select
     , iff(epi.product_id in (40, 44, 45, 1139, 1187) -- web-eligible product IDs
               and epi.species = 'human'
               and epi.cell_modification = 'knock_out'
-              and epi.edit_type = 'single_guide'
+              and epi.edit_type in ('single_guide', 'single_gene')
               and epi.cell_type = 'immortalized'
               and epi.cell_source = 'synthego_supplied'
               and epi.cell_line in (

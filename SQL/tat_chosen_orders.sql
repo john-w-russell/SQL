@@ -33,8 +33,8 @@ with remove_unwanted_parts as (
     qualify
         product_changes = 1
     )
-, base as (
-    select distinct
+, filtered_orders as (
+    select
         fsoi.sales_order_id
         , fsoi.source_order_reference
         , fsoi.product_type
@@ -111,4 +111,33 @@ with remove_unwanted_parts as (
         )
         and chosen_orders
     )
-select * from base
+, order_aggregation as (
+    select distinct
+        filtered_orders.sales_order_id
+        , filtered_orders.source_order_reference
+        , filtered_orders.order_createddate
+        , filtered_orders.order_ready_to_shipdate
+        , filtered_orders.order_shipdate
+        , filtered_orders.order_original_promise_date
+        , filtered_orders.order_current_promise_date
+        , filtered_orders.company_name
+        , filtered_orders.label
+        , filtered_orders.is_internal
+        , filtered_orders.shipped_ontime_original
+        , filtered_orders.shipped_ontime_current
+        , filtered_orders.overall_tat
+        , filtered_orders.build_tat
+        , filtered_orders.ots_daydiff_original
+        , filtered_orders.ots_daydiff_current
+        , count(distinct filtered_orders.sales_order_item_commerce_id)          as number_of_items_in_order
+        , count(distinct filtered_orders.build_id)                              as number_of_builds_in_order
+        , min(filtered_orders.nmol_units)                                       as min_nmol_units_in_order
+        , max(filtered_orders.nmol_units)                                       as max_nmol_units_in_order
+        , min(filtered_orders.oligo_length)                                     as min_oligo_length_in_order
+        , max(filtered_orders.oligo_length)                                     as max_oligo_length_in_order
+    from
+        filtered_orders
+    group by
+        1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16
+    )
+select * from order_aggregation
