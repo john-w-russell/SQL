@@ -1,7 +1,8 @@
--- use database da_prod_db;
--- use schema analyst_reporting;
---
--- create or replace view vw_buckaneer_orders as
+use database da_prod_db;
+use schema analyst_reporting;
+
+create or replace view vw_buckaneer_orders as
+
 with chosen_cell_lines as (
     select
         name
@@ -180,7 +181,7 @@ with chosen_cell_lines as (
         )
                   and epi.species = 'human'
                   and epi.cell_modification = 'knock_out'
-                  and epi.edit_type = 'single_guide'
+                  and epi.edit_type in ('single_guide', 'single_gene')
                   and epi.cell_type = 'immortalized'
                   and epi.cell_source = 'synthego_supplied'
                   and epi.cell_line in (

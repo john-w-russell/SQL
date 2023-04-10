@@ -185,4 +185,4 @@ order by
     , "synthesis work order start date"
     , "work order pk"
     , "work order item pk"
-limit 100
+-- limit 100
