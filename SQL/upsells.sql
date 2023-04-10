@@ -5,10 +5,10 @@ Cohorts are based on the quarter of the CR order.
 Need to add netsuite bookings data for top paying customers.
  */
 
--- use database da_prod_db;
--- use schema analyst_reporting;
---
--- create or replace view vw_upsells_weekly as
+use database da_prod_db;
+use schema analyst_reporting;
+
+create or replace view vw_upsells_weekly as
 
 with total_spend as (
     /*
@@ -246,12 +246,22 @@ with total_spend as (
     select
         customer_spine.dte
         , customer_spine.customer
-        , customer_spine.is_top_paying_company
+--         , customer_spine.is_top_paying_company
+        , coalesce(is_top_paying_company, lag(is_top_paying_company)
+            ignore nulls over (partition by customer order by dte))             as is_top_paying_company
         , customer_spine.customer_quarter_cohort
-        , customer_spine.company_name
-        , customer_spine.industry
-        , customer_spine.institution_type
-        , customer_spine.number_of_employees
+--         , customer_spine.company_name
+        , coalesce(company_name, lag(company_name) ignore nulls over
+            (partition by customer order by dte))                               as current_company
+--         , customer_spine.industry
+        , coalesce(industry, lag(industry) ignore nulls over
+            (partition by customer order by dte))                               as company_industry
+--         , customer_spine.institution_type
+        , coalesce(institution_type, lag(institution_type) ignore nulls over
+            (partition by customer order by dte))                               as company_institution_type
+--         , customer_spine.number_of_employees
+        , coalesce(number_of_employees, lag(number_of_employees) ignore nulls
+            over (partition by customer order by dte))                          as company_size
         , customer_spine.order_date
 --         , customer_spine.first_cr_ordered_at_pst
 --         , customer_spine.order_type
@@ -290,10 +300,10 @@ with total_spend as (
         , upsell_tracking.customer
         , upsell_tracking.is_top_paying_company
         , upsell_tracking.customer_quarter_cohort
-        , upsell_tracking.company_name
-        , upsell_tracking.industry
-        , upsell_tracking.institution_type
-        , upsell_tracking.number_of_employees
+        , upsell_tracking.current_company
+        , upsell_tracking.company_industry
+        , upsell_tracking.company_institution_type
+        , upsell_tracking.company_size
         , upsell_tracking.order_date
         , upsell_tracking.num_orders
         , upsell_tracking.list_sales_orders
@@ -348,12 +358,12 @@ with total_spend as (
         , date_trunc('week', dte)            as wk
         , weekiso(dte)                       as wk_num
         , yr
-        , company_name
+        , current_company
         , is_top_paying_company
         , customer_quarter_cohort
-        , industry
-        , institution_type
-        , number_of_employees
+        , company_industry
+        , company_institution_type
+        , company_size
         , max(date_trunc('week', order_date))                                   as order_wk
         , max(date_trunc('week', upsell_date))                                  as upsell_wk
         , sum(num_orders)                                                       as number_of_orders
@@ -380,4 +390,3 @@ with total_spend as (
         , 10
     )
 select * from final
--- select * from upsell_tracking where customer = 'Fatima AMOR' order by dte
