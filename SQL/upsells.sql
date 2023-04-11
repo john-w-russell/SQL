@@ -5,10 +5,10 @@ Cohorts are based on the quarter of the CR order.
 Need to add netsuite bookings data for top paying customers.
  */
 
-use database da_prod_db;
-use schema analyst_reporting;
-
-create or replace view vw_upsells_weekly as
+-- use database da_prod_db;
+-- use schema analyst_reporting;
+--
+-- create or replace view vw_upsells_weekly as
 
 with total_spend as (
     /*
@@ -27,7 +27,7 @@ with total_spend as (
     )
    , company_spend_last_yr as (
     select
-        dfb.end_customer                                                        as company_name
+        initcap(dfb.end_customer)                                               as company_name
         , sum(dfb.net_amount_in_usd)                                            as company_net_amt
     from
         da_prod_db.datacore.fact_booking dfb
@@ -56,8 +56,8 @@ with total_spend as (
 
    , bookings as (
     select
-        fact_booking.shipping_attention                                         as customer
-        , fact_booking.end_customer                                             as company_name
+        initcap(fact_booking.shipping_attention)                                as customer
+        , initcap(fact_booking.end_customer)                                    as company_name
         , top_paying_companies.is_top_paying_company
         , try_cast(fact_booking.sales_order_number_st as int)                   as buck_order_id
         , fact_booking.date                                                     as order_date
@@ -150,6 +150,7 @@ with total_spend as (
         , customer_orders.first_order_at_pst
         , customer_orders.first_cr_ordered_at_pst
         , customer_orders.first_ec_ordered_at_pst
+        , year(customer_orders.first_ec_ordered_at_pst)                         as ec_purhase_yr
         , max(customer_orders.order_type)                                       as order_type
         , count(customer_orders.buck_order_id)                                  as number_of_orders
         , listagg(customer_orders.buck_order_id, ', ')                          as list_sales_orders
@@ -191,6 +192,7 @@ with total_spend as (
         , ord.number_of_employees
         , cust.first_cr_ordered_at_pst
         , cust.first_ec_ordered_at_pst
+        , cust.ec_purhase_yr
         , iff(ord.order_date is not null, dte, null)                            as order_date
         , ord.order_type
         , iff(ord.order_date is not null, ord.number_of_orders, 0)              as num_orders
@@ -211,6 +213,7 @@ with total_spend as (
                 , customer_daily_rollup.first_order_at_pst
                 , customer_daily_rollup.first_cr_ordered_at_pst
                 , customer_daily_rollup.first_ec_ordered_at_pst
+                , customer_daily_rollup.ec_purhase_yr
             from
                 customer_daily_rollup
             ) as cust
@@ -272,12 +275,7 @@ with total_spend as (
               when customer_spine.order_type = 'EC'
               and customer_spine.first_ec_ordered_at_pst >=
                   customer_spine.first_cr_ordered_at_pst
-                  then true
-              when customer_spine.order_type = 'EC'
-              and datediff(month, customer_spine.first_ec_ordered_at_pst
-                          , customer_spine.first_cr_ordered_at_pst) > 24
-              and customer_spine.order_date >=
-                  customer_spine.first_cr_ordered_at_pst
+              and year(customer_spine.order_date) = ec_purhase_yr
                   then true
               else false
           end                                                                   as is_upsell

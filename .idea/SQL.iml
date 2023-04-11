@@ -2,6 +2,7 @@
 <module type="DBE_MODULE" version="4">
   <component name="NewModuleRootManager">
     <content url="file://$MODULE_DIR$/../Commercial" />
+    <content url="file://$MODULE_DIR$/../Eclipse" />
     <content url="file://$MODULE_DIR$/../Halo" />
     <content url="file://$MODULE_DIR$" />
     <orderEntry type="inheritedJdk" />
