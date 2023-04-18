@@ -150,7 +150,7 @@ with total_spend as (
         , company_orders.first_order_at_pst
         , company_orders.first_cr_ordered_at_pst
         , company_orders.first_ec_ordered_at_pst
-        , year(company_orders.first_ec_ordered_at_pst)                          as ec_purhase_yr
+        , year(company_orders.first_ec_ordered_at_pst)                          as ec_purchase_yr
         , max(company_orders.order_type)                                        as order_type
         , count(company_orders.buck_order_id)                                   as number_of_orders
         , listagg(company_orders.buck_order_id, ', ')                           as list_sales_orders
@@ -192,7 +192,7 @@ with total_spend as (
         , cust.number_of_employees
         , cust.first_cr_ordered_at_pst
         , cust.first_ec_ordered_at_pst
-        , cust.ec_purhase_yr
+        , cust.ec_purchase_yr
         , iff(ord.order_date is not null, dte, null)                            as order_date
         , ord.order_type
         , iff(ord.order_date is not null, ord.number_of_orders, 0)              as num_orders
@@ -212,7 +212,7 @@ with total_spend as (
                 , company_daily_rollup.first_order_at_pst
                 , company_daily_rollup.first_cr_ordered_at_pst
                 , company_daily_rollup.first_ec_ordered_at_pst
-                , company_daily_rollup.ec_purhase_yr
+                , company_daily_rollup.ec_purchase_yr
             from
                 company_daily_rollup
             ) as cust
@@ -261,10 +261,10 @@ with total_spend as (
               when company_spine.order_type = 'EC'
               and company_spine.first_ec_ordered_at_pst >=
                   company_spine.first_cr_ordered_at_pst
-              and year(company_spine.order_date) = ec_purhase_yr
+              and year(company_spine.order_date) = ec_purchase_yr
                   then true
 --               when company_spine.order_type = 'EC'
---               and company_spine.ec_purhase_yr = 2020
+--               and company_spine.ec_purchase_yr = 2020
 --               and datediff(month, company_spine.first_ec_ordered_at_pst
 --                           , company_spine.first_cr_ordered_at_pst) > 24
 --               and company_spine.order_date >=
@@ -335,7 +335,7 @@ with total_spend as (
         , date_trunc('week', dte)                                               as wk
         , weekiso(dte)                                                          as wk_num
         , yr
-        , is_top_paying_company
+        , coalesce(is_top_paying_company, false)                                as is_top_paying_company
         , company_quarter_cohort
         , industry
         , institution_type

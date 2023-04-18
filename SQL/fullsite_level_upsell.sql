@@ -1,12 +1,14 @@
 /*
 Tracks every upsold customer's EC ordering over 365 days from CR order date.
 Cohorts are based on the quarter of the CR order.
+
+Query is at the full_site level.
  */
 
 use database da_prod_db;
 use schema analyst_reporting;
 
-create or replace view vw_upsells_weekly as
+create or replace view vw_fullsite_upsells_weekly as
 
 with total_spend as (
     /*
@@ -59,7 +61,6 @@ with total_spend as (
         , first_value(fact_booking.item_product_family) over
             (partition by fact_booking.buck_sales_order_id
             order by item_product_family desc)                                  as order_family
-        , initcap(fact_booking.shipping_attention)                              as customer_name
         , initcap(fact_booking.end_customer)                                    as company_name
         , coalesce(top_paying_companies.is_top_paying_company, false)           as is_top_paying_company
         , fact_booking.net_amount_in_usd
@@ -75,21 +76,17 @@ with total_spend as (
     select
         bot.buck_order_id
         , bot.order_family
-        , bot.customer_name
         , bot.company_name
         , bot.is_top_paying_company
         , min(bot.order_date)                                                   as order_date
         , sum(bot.net_amount_in_usd)                                            as net_amount
     from
         bookings_order_type                                                     bot
-        left join top_paying_companies
-            on bot.company_name = top_paying_companies.company_name
     group by
         1
         , 2
         , 3
         , 4
-        , 5
     )
    , sales_order_item_rollup as (
     select
@@ -118,29 +115,31 @@ with total_spend as (
      We define the order type as CR or EC. We also add in relevant account info.
      */
     select
-        fbk.buck_order_id
-        , fbk.customer_name
-        , soi.full_site
+        soi.full_site
         , fbk.company_name
         , fbk.is_top_paying_company
-        , sfo.id                                                                as salesforce_order_id
-        , mode(sfa.id) over (partition by fbk.company_name)                     as salesforce_account_id
-        , mode(sfa.name) over (partition by fbk.company_name)                   as salesforce_account_name
-        , mode(sfa.segment__c) over (partition by fbk.company_name)             as segment
-        , mode(sfa.industry) over (partition by fbk.company_name)               as industry
-        , mode(sfa.institution_type__c) over (partition by fbk.company_name)    as institution_type
-        , mode(sfa.numberofemployees) over (partition by fbk.company_name)      as number_of_employees
+        , fbk.buck_order_id
+        , soi.salesforce_order_id
+        , soi.salesforce_account_id
+        , mode(sfa.segment__c) over
+            (partition by fbk.company_name)                                     as segment
+        , mode(sfa.industry) over
+            (partition by fbk.company_name)                                     as industry
+        , mode(sfa.institution_type__c) over
+            (partition by fbk.company_name)                                     as institution_type
+        , mode(sfa.numberofemployees) over
+            (partition by fbk.company_name)                                     as number_of_employees
         , fbk.order_date
         , iff(fbk.order_family = 'Engineered Cells', 'EC', 'CR')                as order_type
         , soi.num_items_in_order
         , fbk.net_amount
-        , min(fbk.order_date) over (partition by customer_name)                 as first_order_at_pst
+        , min(fbk.order_date) over (partition by soi.full_site)                 as first_order_at_pst
         , min(iff(order_type = 'CR'
                   , fbk.order_date
-                  , null)) over (partition by customer_name)                    as first_cr_ordered_at_pst
+                  , null)) over (partition by soi.full_site)                    as first_cr_ordered_at_pst
         , min(iff(order_type = 'EC'
                   , fbk.order_date
-                  , null)) over (partition by customer_name)                    as first_ec_ordered_at_pst
+                  , null)) over (partition by soi.full_site)                    as first_ec_ordered_at_pst
     from
         bookings                                                                fbk
     left join sales_order_item_rollup                                           soi
@@ -152,8 +151,7 @@ with total_spend as (
     )
    , customer_daily_rollup as (
     select
-        customer_orders.order_date
-        , customer_orders.customer_name
+        to_date(customer_orders.order_date)                                     as order_date
         , customer_orders.full_site
         , customer_orders.company_name
         , customer_orders.is_top_paying_company
@@ -187,13 +185,11 @@ with total_spend as (
         , 10
         , 11
         , 12
-        , 13
     )
    , customer_spine as (
     select
         to_date(dim_dates.date)                                                 as dte
-        , cust.customer_name
-        , ord.full_site
+        , cust.full_site
         , ord.company_name
         , ord.is_top_paying_company
         , to_varchar(date_part(year
@@ -220,7 +216,7 @@ with total_spend as (
         da_prod_db.analyst_reporting.dim_dates
         cross join (
             select distinct
-                customer_daily_rollup.customer_name
+                customer_daily_rollup.full_site
                 , customer_daily_rollup.first_order_at_pst
                 , customer_daily_rollup.first_cr_ordered_at_pst
                 , customer_daily_rollup.first_ec_ordered_at_pst
@@ -230,8 +226,7 @@ with total_spend as (
             ) as cust
         left join (
             select distinct
-                customer_daily_rollup.customer_name
-                , customer_daily_rollup.full_site
+                customer_daily_rollup.full_site
                 , customer_daily_rollup.company_name
                 , customer_daily_rollup.is_top_paying_company
                 , customer_daily_rollup.segment
@@ -248,7 +243,7 @@ with total_spend as (
                 customer_daily_rollup
             ) as ord
             on to_date(dim_dates.date) = ord.order_date
-            and cust.customer_name = ord.customer_name
+            and cust.full_site = ord.full_site
     where
         (to_date(dim_dates.date) between
             to_date(cust.first_order_at_pst)
@@ -260,23 +255,24 @@ with total_spend as (
      */
     select
         customer_spine.dte
-        , customer_spine.customer_name
-        , coalesce(full_site, lag(full_site)
-            ignore nulls over (partition by customer_name order by dte))        as full_site
-        , coalesce(company_name, lag(company_name)
-            ignore nulls over (partition by customer_name order by dte))        as company_name
+        , customer_spine.full_site
+        , coalesce(customer_spine.company_name, lag(customer_spine.company_name)
+            ignore nulls over (partition by customer_spine.full_site
+                order by dte))                                                  as company_name
         , coalesce(is_top_paying_company, lag(is_top_paying_company)
-            ignore nulls over (partition by customer_name order by dte))        as is_top_paying_company
+            ignore nulls over (partition by full_site order by dte))            as is_top_paying_company
         , customer_spine.customer_quarter_cohort
-        , coalesce(segment, lag(segment) ignore nulls over
-            (partition by customer_name order by dte))                          as company_segment
-        , coalesce(industry, lag(industry) ignore nulls over
-            (partition by customer_name order by dte))                          as company_industry
-        , coalesce(institution_type, lag(institution_type) ignore nulls over
-            (partition by customer_name order by dte))                          as company_institution_type
-        , coalesce(number_of_employees, lag(number_of_employees) ignore nulls
-            over (partition by customer_name order by dte))                     as company_size
+        , coalesce(segment, lag(segment)
+            ignore nulls over (partition by full_site order by dte))            as segment
+        , coalesce(industry, lag(industry)
+            ignore nulls over (partition by full_site order by dte))            as industry
+        , coalesce(institution_type, lag(institution_type)
+            ignore nulls over (partition by full_site order by dte))            as institution_type
+        , coalesce(number_of_employees, lag(number_of_employees)
+            ignore nulls over (partition by full_site order by dte))            as number_of_employees
         , customer_spine.order_date
+--         , customer_spine.first_cr_ordered_at_pst
+--         , customer_spine.order_type
         , customer_spine.num_orders
         , customer_spine.list_sales_orders
         , customer_spine.num_items
@@ -295,15 +291,14 @@ with total_spend as (
     select
         upsell_tracking.dte
         , year(upsell_tracking.dte)                                             as yr
-        , upsell_tracking.customer_name
         , upsell_tracking.full_site
         , upsell_tracking.company_name
         , upsell_tracking.is_top_paying_company
         , upsell_tracking.customer_quarter_cohort
-        , upsell_tracking.company_segment
-        , upsell_tracking.company_industry
-        , upsell_tracking.company_institution_type
-        , upsell_tracking.company_size
+        , upsell_tracking.segment
+        , upsell_tracking.industry
+        , upsell_tracking.institution_type
+        , upsell_tracking.number_of_employees
         , upsell_tracking.order_date
         , upsell_tracking.num_orders
         , upsell_tracking.list_sales_orders
@@ -312,42 +307,62 @@ with total_spend as (
         , upsell_tracking.upsell_date
         , upsell_tracking.total_amount
         , sum(iff(upsell_tracking.order_date is not null
+                  /*and upsell_tracking.upsell_date >= '2023-01-01'*/
             , upsell_tracking.num_orders
             , 0))
-            over (partition by upsell_tracking.customer_name, yr
+            over (partition by upsell_tracking.full_site, yr
                 order by upsell_tracking.dte)                                   as order_count
         , sum(iff(upsell_tracking.upsell_date is not null
+                  /*and upsell_tracking.upsell_date >= '2023-01-01'*/
             , 1
             , 0))
-            over (partition by upsell_tracking.customer_name, yr
+            over (partition by upsell_tracking.full_site, yr
                 order by upsell_tracking.dte)                                   as upsell_count
         , sum(iff(upsell_tracking.order_date is not null
+                  /*and upsell_tracking.upsell_date >= '2023-01-01'*/
             , total_amount
             , 0))
-            over (partition by upsell_tracking.customer_name, yr
+            over (partition by upsell_tracking.full_site, yr
                 order by upsell_tracking.dte)                                   as cumulative_order_amt
         , sum(iff(upsell_tracking.upsell_date is not null
+                  /*and upsell_tracking.upsell_date >= '2023-01-01'*/
             , total_amount
             , 0))
-            over (partition by upsell_tracking.customer_name, yr
+            over (partition by upsell_tracking.full_site, yr
                 order by upsell_tracking.dte)                                   as cumulative_upsell_amt
+--         , cumulative_upsell_amt * 1.25                                          as target_amt
     from
         upsell_tracking
     )
+   , target_values as (
+    select
+        date_trunc('week', cumulative_upsells.dte)                              as wk
+        , weekiso(cumulative_upsells.dte)                                       as wk_num
+        , iff(year(wk) =
+              year(dateadd(year, -1, current_date))
+            , max(cumulative_upsells.cumulative_upsell_amt)
+            , null)                                                             as cumulative_upsell_amount
+        , cumulative_upsell_amount * 1.25                                       as target_amount
+    from
+        cumulative_upsells
+    group by
+        1
+        , 2
+    )
     , final as (
     select
-        customer_name
-        , full_site
+        full_site
         , company_name
-        , date_trunc('week', dte)            as wk
-        , weekiso(dte)                       as wk_num
+        , date_trunc('week', dte)                                               as wk
+        , weekiso(dte)                                                          as wk_num
         , yr
         , coalesce(is_top_paying_company, false)                                as is_top_paying_company
         , customer_quarter_cohort
-        , company_segment
-        , company_industry
-        , company_institution_type
-        , company_size
+        , segment
+        , industry
+        , institution_type
+        , number_of_employees
+        , target_values.target_amount
         , max(date_trunc('week', order_date))                                   as order_wk
         , max(date_trunc('week', upsell_date))                                  as upsell_wk
         , sum(num_orders)                                                       as number_of_orders
@@ -360,6 +375,9 @@ with total_spend as (
         , max(cumulative_upsell_amt)                                            as cumulative_upsell_amt
     from
         cumulative_upsells
+    left join target_values
+        on weekiso(cumulative_upsells.dte) = target_values.wk_num
+    where target_values.target_amount is not null
     group by
         1
         , 2
