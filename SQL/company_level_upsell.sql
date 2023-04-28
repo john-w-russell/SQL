@@ -54,113 +54,128 @@ with total_spend as (
     )
 
 
-   , bookings as (
+   , bookings_order_type as (
     select
-        initcap(fact_booking.end_customer)                                      as company_name
-        , top_paying_companies.is_top_paying_company
-        , try_cast(fact_booking.sales_order_number_st as int)                   as buck_order_id
-        , fact_booking.date                                                     as order_date
-        , fact_booking.date_shipped                                             as ship_date
-        , sum(fact_booking.net_amount_in_usd)                                   as net_amount
+        fact_booking.buck_sales_order_id                                        as buck_order_id
+        , to_date(fact_booking.date)                                            as order_date
+        , first_value(fact_booking.item_product_family) over
+            (partition by fact_booking.buck_sales_order_id
+            order by item_product_family desc)                                  as order_family
+        , fact_booking.commerce_id
+        , fact_booking.item_product_line
+        , fact_booking.item_name
+        , initcap(fact_booking.end_customer)                                    as company_name
+        , coalesce(top_paying_companies.is_top_paying_company, false)           as is_top_paying_company
+        , fact_booking.net_amount_in_usd
     from
         da_prod_db.datacore.fact_booking
         left join top_paying_companies
             on fact_booking.end_customer = top_paying_companies.company_name
     where
-        fact_booking.date_shipped is not null
+        fact_booking.net_amount_in_usd is not null
+        and fact_booking.date_shipped is not null
+        and fact_booking.buck_sales_order_id is not null
+    )
+   , bookings as (
+    select
+        bot.buck_order_id
+        , bot.order_family
+        , bot.company_name
+        , bot.is_top_paying_company
+        , listagg(distinct case when bot.commerce_id not like '%delivery-group%'
+            then bot.commerce_id end,  ', ')                                    as commerce_id_list
+        , listagg(distinct bot.item_product_line, ', ')                         as product_lines
+        , iff(product_lines ilike '%gko%', true, false)                         as is_gko_order
+        , min(bot.order_date)                                                   as order_date
+        , count(distinct bot.commerce_id)                                       as number_sales_order_items
+        , sum(bot.net_amount_in_usd)                                            as net_amount
+    from
+        bookings_order_type                                                     bot
     group by
         1
         , 2
         , 3
         , 4
-        , 5
     )
-   , company_orders as (
+   , sales_order_item_rollup as (
+    select
+        fnoi.buck_order_id
+        , fnoi.end_company_name                                                 as company_name
+        , row_number() over (partition by fnoi.buck_order_id
+            order by fnoi.order_date)                                           as rn
+    from
+        da_prod_db.datacore.fact_netsuite_order_items                           fnoi
+    where
+        fnoi.ship_date is not null
+        and fnoi.ship_attention is not null -- 29 rows where ship date is not null and ship attention is null after 2022-01-01
+    qualify
+        rn = 1
+    )
+   , customer_orders as (
     /*
      We define the order type as CR or EC. We also add in relevant account info.
      */
     select
-        fbk.company_name
+        soi.company_name
         , fbk.is_top_paying_company
         , fbk.buck_order_id
-        , bod.id                                                                as buck_delivery_group_id
         , sfo.id                                                                as salesforce_order_id
-        , mode(sfa.id) over
-            (partition by fbk.company_name)                                     as salesforce_account_id
-        , mode(sfa.name) over
-            (partition by fbk.company_name)                                     as salesforce_account_name
-        , mode(sfa.segment__c) over
-            (partition by fbk.company_name)                                     as segment
-        , mode(sfa.industry) over
-            (partition by fbk.company_name)                                     as industry
-        , mode(sfa.institution_type__c) over
-            (partition by fbk.company_name)                                     as institution_type
-        , mode(sfa.numberofemployees) over
-            (partition by fbk.company_name)                                     as number_of_employees
-        , boo.status                                                            as order_status
+        , mode(sfa.id) over (partition by soi.company_name)                     as salesforce_account_id
+        , mode(sfa.name) over (partition by soi.company_name)                   as salesforce_account_name
+        , mode(sfa.segment__c) over (partition by soi.company_name)             as segment
+        , mode(sfa.industry) over (partition by soi.company_name)               as industry
+        , mode(sfa.institution_type__c) over (partition by soi.company_name)    as institution_type
+        , mode(sfa.numberofemployees) over (partition by soi.company_name)      as number_of_employees
         , fbk.order_date
-        , fbk.ship_date
-        , upper(bpp.family)                                                     as order_type
-        , fbk.net_amount                                                        as order_amount
-        , min(fbk.order_date) over (partition by fbk.company_name)              as first_order_at_pst
-        , min(iff(upper(bpp.family) = 'CR'
+        , iff(fbk.order_family = 'Engineered Cells', 'EC', 'CR')                as order_type
+        , fbk.commerce_id_list
+        , fbk.product_lines
+        , fbk.number_sales_order_items
+        , fbk.net_amount
+        , min(fbk.order_date) over (partition by soi.company_name)              as first_order_at
+        , min(iff(order_type = 'CR'
                   , fbk.order_date
-                  , null)) over (partition by fbk.company_name)                 as first_cr_ordered_at_pst
-        , min(iff(upper(bpp.family) = 'EC'
+                  , null)) over (partition by soi.company_name)                 as first_cr_ordered_at
+        , max(iff(fbk.is_gko_order
                   , fbk.order_date
-                  , null)) over (partition by fbk.company_name)                 as first_ec_ordered_at_pst
-        , count(distinct coalesce(boi.parent_ordered_item_id, boi.id)) over
-        (partition by boo.id)                                                   as number_of_items_in_order
-        , row_number() over (partition by boo.id
-        order by fbk.order_date desc)                                           as rn
+                  , null)) over (partition by soi.company_name)                 as last_gko_order_at
+        , min(iff(order_type = 'EC'
+                  , fbk.order_date
+                  , null)) over (partition by soi.company_name)                 as first_ec_ordered_at
     from
-        bookings                                                                fbk
-    left join stitch.stitch_buckaneer_prod.order_order                          boo
-        on fbk.buck_order_id = boo.id
-        and boo.status not in ('cart', 'canceled', 'declined', 'new')
-    left join stitch.stitch_buckaneer_prod.order_deliverygroup                  bod
-        on boo.id = bod.order_id
-    left join stitch.stitch_buckaneer_prod.order_ordereditem                    boi
-        on bod.id = boi.delivery_group_id
-    left join stitch.stitch_buckaneer_prod.product_product                      bpp
-        on boi.product_id = bpp.id
-        and lower(bpp.name) not like '%shipping%' -- exclude shipping addon charges
-    left join stitch.stitch_buckaneer_prod.userprofile_address bua
-        on boo.shipping_address_id = bua.id
-    left join datacore.fact_netsuite_order_items                                noi
-        on boo.id = noi.external_id
+        sales_order_item_rollup                                                 soi
+    left join bookings                                                          fbk
+        on soi.buck_order_id = fbk.buck_order_id
     left join stitch.stitch_salesforce_prod."ORDER"                             sfo
-        on boo.id = sfo.buck_id__c
+        on soi.buck_order_id = sfo.buck_id__c
     left join stitch.stitch_salesforce_prod.account                             sfa
         on sfo.accountid = sfa.id
-    where
-        bpp.family in ('ec', 'cr')
-        qualify
-            rn = 1
     )
-   , company_daily_rollup as (
+   , customer_daily_rollup as (
     select
-        company_orders.company_name
-        , company_orders.is_top_paying_company
-        , to_date(company_orders.order_date)                                    as order_date
-        , company_orders.segment
-        , company_orders.industry
-        , company_orders.institution_type
-        , company_orders.number_of_employees
-        , company_orders.first_order_at_pst
-        , company_orders.first_cr_ordered_at_pst
-        , company_orders.first_ec_ordered_at_pst
-        , year(company_orders.first_ec_ordered_at_pst)                          as ec_purchase_yr
-        , max(company_orders.order_type)                                        as order_type
-        , count(company_orders.buck_order_id)                                   as number_of_orders
-        , listagg(company_orders.buck_order_id, ', ')                           as list_sales_orders
-        , sum(company_orders.number_of_items_in_order)                          as number_of_items
-        , sum(company_orders.order_amount)                                      as total_order_amount
+        to_date(customer_orders.order_date)                                     as order_date
+        , customer_orders.company_name
+        , customer_orders.is_top_paying_company
+        , customer_orders.segment
+        , customer_orders.industry
+        , customer_orders.institution_type
+        , customer_orders.number_of_employees
+        , customer_orders.first_order_at
+        , customer_orders.first_cr_ordered_at
+        , customer_orders.last_gko_order_at
+        , customer_orders.first_ec_ordered_at
+        , year(customer_orders.first_ec_ordered_at)                             as ec_purchase_yr
+        , max(customer_orders.order_type)                                       as order_type
+        , listagg(customer_orders.buck_order_id, ', ')                          as list_sales_orders
+        , count(customer_orders.buck_order_id)                                  as number_of_orders
+        , listagg(distinct customer_orders.commerce_id_list, ', ')              as list_commerce_id
+        , listagg(distinct customer_orders.product_lines, ', ')                 as list_product_lines
+        , sum(customer_orders.number_sales_order_items)                         as number_of_items
+        , sum(customer_orders.net_amount)                                       as total_order_amount
     from
-        company_orders
+        customer_orders
     where
-        company_orders.first_cr_ordered_at_pst >= '2020-01-01'
---         and company_orders.first_ec_ordered_at_pst >= '2023-01-01'
+        customer_orders.first_order_at >= '2020-01-01'
     group by
         1
         , 2
@@ -174,65 +189,71 @@ with total_spend as (
         , 10
         , 11
     )
-   , company_spine as (
+   , customer_spine as (
     select
-        cust.company_name
-        , to_date(dim_dates.date)                                               as dte
-        , cust.is_top_paying_company
+        to_date(dim_dates.date)                                                 as dte
+        , cust.company_name
+        , ord.is_top_paying_company
         , to_varchar(date_part(year
-        , cust.first_order_at_pst))
+        , cust.first_order_at))
         ||
           ' Q'
         ||
           to_varchar(date_part(quarter
-              , cust.first_order_at_pst))                                       as company_quarter_cohort
-        , cust.segment
-        , cust.industry
-        , cust.institution_type
-        , cust.number_of_employees
-        , cust.first_cr_ordered_at_pst
-        , cust.first_ec_ordered_at_pst
+              , cust.first_order_at))                                           as company_quarter_cohort
+        , ord.segment
+        , ord.industry
+        , ord.institution_type
+        , ord.number_of_employees
+        , cust.first_cr_ordered_at
+        , cust.last_gko_order_at
+        , cust.first_ec_ordered_at
         , cust.ec_purchase_yr
         , iff(ord.order_date is not null, dte, null)                            as order_date
         , ord.order_type
-        , iff(ord.order_date is not null, ord.number_of_orders, 0)              as num_orders
         , ord.list_sales_orders
+        , iff(ord.order_date is not null, ord.number_of_orders, 0)              as num_orders
+        , ord.list_commerce_id
+        , ord.list_product_lines
         , iff(ord.order_date is not null, ord.number_of_items, 0)               as num_items
         , iff(ord.order_date is not null, ord.total_order_amount, 0)            as total_amount
     from
         da_prod_db.analyst_reporting.dim_dates
         cross join (
             select distinct
-                company_daily_rollup.company_name
-                , company_daily_rollup.is_top_paying_company
-                , company_daily_rollup.segment
-                , company_daily_rollup.industry
-                , company_daily_rollup.institution_type
-                , company_daily_rollup.number_of_employees
-                , company_daily_rollup.first_order_at_pst
-                , company_daily_rollup.first_cr_ordered_at_pst
-                , company_daily_rollup.first_ec_ordered_at_pst
-                , company_daily_rollup.ec_purchase_yr
+                customer_daily_rollup.company_name
+                , customer_daily_rollup.first_order_at
+                , customer_daily_rollup.first_cr_ordered_at
+                , customer_daily_rollup.last_gko_order_at
+                , customer_daily_rollup.first_ec_ordered_at
+                , customer_daily_rollup.ec_purchase_yr
             from
-                company_daily_rollup
+                customer_daily_rollup
             ) as cust
         left join (
             select distinct
-                company_daily_rollup.company_name
-                , company_daily_rollup.order_date
-                , company_daily_rollup.order_type
-                , company_daily_rollup.number_of_orders
-                , company_daily_rollup.number_of_items
-                , company_daily_rollup.list_sales_orders
-                , company_daily_rollup.total_order_amount
+                customer_daily_rollup.company_name
+                , customer_daily_rollup.is_top_paying_company
+                , customer_daily_rollup.segment
+                , customer_daily_rollup.industry
+                , customer_daily_rollup.institution_type
+                , customer_daily_rollup.number_of_employees
+                , customer_daily_rollup.order_date
+                , customer_daily_rollup.order_type
+                , customer_daily_rollup.list_sales_orders
+                , customer_daily_rollup.number_of_orders
+                , customer_daily_rollup.list_commerce_id
+                , customer_daily_rollup.list_product_lines
+                , customer_daily_rollup.number_of_items
+                , customer_daily_rollup.total_order_amount
             from
-                company_daily_rollup
+                customer_daily_rollup
             ) as ord
             on to_date(dim_dates.date) = ord.order_date
             and cust.company_name = ord.company_name
     where
         (to_date(dim_dates.date) between
-            to_date(cust.first_order_at_pst)
+            to_date(cust.first_order_at)
             and current_date())
     )
    , upsell_tracking as (
@@ -240,80 +261,97 @@ with total_spend as (
     Measures upsell metric per customer.
      */
     select
-        company_spine.company_name
-        , company_spine.dte
-        , company_spine.is_top_paying_company
-        , company_spine.company_quarter_cohort
-        , company_spine.industry
-        , company_spine.institution_type
-        , company_spine.number_of_employees
-        , company_spine.order_date
---         , company_spine.first_cr_ordered_at_pst
-        , company_spine.order_type
-        , company_spine.num_orders
-        , company_spine.list_sales_orders
-        , company_spine.num_items
---         , company_spine.first_cr_ordered_at_pst
---         , company_spine.first_ec_ordered_at_pst
---         , datediff(year, company_spine.first_ec_ordered_at_pst
---                           , company_spine.first_cr_ordered_at_pst)              as yr_gap
+        customer_spine.dte
+        , customer_spine.company_name
+        , coalesce(is_top_paying_company, lag(is_top_paying_company)
+            ignore nulls over (partition by customer_spine.company_name
+                order by dte))                                                  as is_top_paying_company
+        , customer_spine.company_quarter_cohort
+        , coalesce(segment, lag(segment)
+            ignore nulls over (partition by customer_spine.company_name
+                order by dte))                                                  as segment
+        , coalesce(industry, lag(industry)
+            ignore nulls over (partition by customer_spine.company_name
+                order by dte))                                                  as industry
+        , coalesce(institution_type, lag(institution_type)
+            ignore nulls over (partition by customer_spine.company_name
+                order by dte))                                                  as institution_type
+        , coalesce(number_of_employees, lag(number_of_employees)
+            ignore nulls over (partition by customer_spine.company_name
+                order by dte))                                                  as number_of_employees
+        , customer_spine.first_cr_ordered_at
+        , customer_spine.last_gko_order_at                                      as upsell_target_date
+        , customer_spine.first_ec_ordered_at
+        , customer_spine.order_date
+--         , customer_spine.order_type
+        , customer_spine.list_sales_orders
+        , customer_spine.num_orders
+        , customer_spine.list_commerce_id
+        , customer_spine.list_product_lines
+        , customer_spine.num_items
+        , iff(customer_spine.order_type = 'EC'
+                  and customer_spine.first_ec_ordered_at >=
+                      customer_spine.first_cr_ordered_at
+                  and year(customer_spine.order_date) = ec_purchase_yr
+            , true
+            , false)                                                            as is_upsell
+        , iff(is_upsell, customer_spine.dte, null)                              as upsell_date
         , case
-              when company_spine.order_type = 'EC'
-              and company_spine.first_ec_ordered_at_pst >=
-                  company_spine.first_cr_ordered_at_pst
-              and year(company_spine.order_date) = ec_purchase_yr
+              when customer_spine.first_ec_ordered_at is null
+                  and customer_spine.list_product_lines ilike '%gko%'
                   then true
---               when company_spine.order_type = 'EC'
---               and company_spine.ec_purchase_yr = 2020
---               and datediff(month, company_spine.first_ec_ordered_at_pst
---                           , company_spine.first_cr_ordered_at_pst) > 24
---               and company_spine.order_date >=
---                   company_spine.first_cr_ordered_at_pst
---                   then true
-              else false
-          end                                                                   as is_upsell
-        , iff(is_upsell, company_spine.dte, null)                               as upsell_date
-        , company_spine.total_amount
---     , conditional_true_event((customer_spine.dte <
---                                  to_date(customer_spine.first_ec_ordered_at)
---                               or customer_spine.first_ec_ordered_at is null)
---             and customer_spine.dte >=
---                 to_date(customer_spine.first_cr_ordered_at)) over
---             (partition by customer_spine.account_id
---                 order by customer_spine.dte)                                      as num_days_before_upsell
+              when customer_spine.first_ec_ordered_at is not null
+                  then false
+          end                                                                   as is_upsell_target
+        , customer_spine.total_amount
     from
-        company_spine
+        customer_spine
     )
    , cumulative_upsells as (
     select
-        upsell_tracking.company_name
-        , upsell_tracking.dte
+        upsell_tracking.dte
         , year(upsell_tracking.dte)                                             as yr
+        , upsell_tracking.company_name
         , upsell_tracking.is_top_paying_company
         , upsell_tracking.company_quarter_cohort
+        , upsell_tracking.segment
         , upsell_tracking.industry
         , upsell_tracking.institution_type
         , upsell_tracking.number_of_employees
+        , upsell_tracking.first_cr_ordered_at
+        , upsell_tracking.upsell_target_date
+        , upsell_tracking.first_ec_ordered_at
         , upsell_tracking.order_date
-        , upsell_tracking.order_type
-        , upsell_tracking.num_orders
         , upsell_tracking.list_sales_orders
+        , upsell_tracking.num_orders
+        , upsell_tracking.list_commerce_id
+        , upsell_tracking.list_product_lines
         , upsell_tracking.num_items
         , upsell_tracking.is_upsell
         , upsell_tracking.upsell_date
+        , coalesce(upsell_tracking.is_upsell_target
+            , lag(upsell_tracking.is_upsell_target) ignore nulls
+            over (partition by upsell_tracking.company_name
+                order by dte))                                                  as is_upsell_target
         , upsell_tracking.total_amount
         , sum(iff(upsell_tracking.order_date is not null
                   /*and upsell_tracking.upsell_date >= '2023-01-01'*/
             , upsell_tracking.num_orders
             , 0))
             over (partition by upsell_tracking.company_name, yr
-                order by upsell_tracking.dte)                                   as order_count
+                order by upsell_tracking.dte)                                   as cumulative_order_count
+        , sum(iff(upsell_tracking.order_date is not null
+                  /*and upsell_tracking.upsell_date >= '2023-01-01'*/
+            , upsell_tracking.num_items
+            , 0))
+            over (partition by upsell_tracking.company_name, yr
+                order by upsell_tracking.dte)                                   as cumulative_item_count
         , sum(iff(upsell_tracking.upsell_date is not null
                   /*and upsell_tracking.upsell_date >= '2023-01-01'*/
             , 1
             , 0))
             over (partition by upsell_tracking.company_name, yr
-                order by upsell_tracking.dte)                                   as upsell_count
+                order by upsell_tracking.dte)                                   as cumulative_upsell_count
         , sum(iff(upsell_tracking.order_date is not null
                   /*and upsell_tracking.upsell_date >= '2023-01-01'*/
             , total_amount
@@ -326,31 +364,39 @@ with total_spend as (
             , 0))
             over (partition by upsell_tracking.company_name, yr
                 order by upsell_tracking.dte)                                   as cumulative_upsell_amt
+--         , cumulative_upsell_amt * 1.25                                          as target_amt
     from
         upsell_tracking
     )
     , final as (
     select
-        company_name
-        , date_trunc('week', dte)                                               as wk
-        , weekiso(dte)                                                          as wk_num
-        , yr
-        , coalesce(is_top_paying_company, false)                                as is_top_paying_company
-        , company_quarter_cohort
-        , industry
-        , institution_type
-        , number_of_employees
-        , max(date_trunc('week', order_date))                                   as order_wk
-        , max(date_trunc('week', upsell_date))                                  as upsell_wk
-        , sum(num_orders)                                                       as number_of_orders
-        , sum(total_amount)                                                     as total_amt
-        , listagg(list_sales_orders, ', ')                                      as sales_order_numbers
-        , sum(num_items)                                                        as number_of_items
---     , is_upsold
-        , max(order_count)                                                      as order_count
-        , max(cumulative_order_amt)                                             as cumulative_order_amt
-        , max(upsell_count)                                                     as upsell_count
-        , max(cumulative_upsell_amt)                                            as cumulative_upsell_amt
+        cumulative_upsells.company_name
+        , date_trunc('week', cumulative_upsells.dte)                            as wk
+        , weekiso(cumulative_upsells.dte)                                       as wk_num
+        , cumulative_upsells.yr
+        , coalesce(cumulative_upsells.is_top_paying_company, false)             as is_top_paying_company
+        , cumulative_upsells.company_quarter_cohort
+        , cumulative_upsells.segment
+        , cumulative_upsells.industry
+        , cumulative_upsells.institution_type
+        , cumulative_upsells.number_of_employees
+        , cumulative_upsells.first_cr_ordered_at
+        , cumulative_upsells.upsell_target_date
+        , cumulative_upsells.first_ec_ordered_at
+        , cumulative_upsells.is_upsell_target
+        , max(date_trunc('week', cumulative_upsells.order_date))                as order_wk
+        , max(date_trunc('week', cumulative_upsells.upsell_date))               as upsell_wk
+        , listagg(cumulative_upsells.list_sales_orders, ', ')                   as list_sales_orders
+        , sum(cumulative_upsells.num_orders)                                    as number_of_orders
+        , listagg(cumulative_upsells.list_commerce_id, ', ')                    as list_commerce_id
+        , listagg(distinct cumulative_upsells.list_product_lines, ', ')         as product_lines
+        , sum(cumulative_upsells.num_items)                                     as number_of_items
+        , sum(cumulative_upsells.total_amount)                                  as total_amt
+        , max(cumulative_upsells.cumulative_order_count)                        as cumulative_order_count
+        , max(cumulative_upsells.cumulative_item_count)                         as cumulative_item_count
+        , max(cumulative_upsells.cumulative_order_amt)                          as cumulative_order_amt
+        , max(cumulative_upsells.cumulative_upsell_count)                       as cumulative_upsell_count
+        , max(cumulative_upsells.cumulative_upsell_amt)                         as cumulative_upsell_amt
     from
         cumulative_upsells
     group by
@@ -363,5 +409,57 @@ with total_spend as (
         , 7
         , 8
         , 9
+        , 10
+        , 11
+        , 12
+        , 13
+        , 14
     )
+--    , target_values as (
+--     select
+--         base.wk
+--         , base.wk_num
+--         , base.yr
+--         , iff(yr =
+--               year(dateadd(year, -1, current_date))
+--         , sum(base.cumulative_upsell_amt)
+--         , null)                                                                 as cumulative_upsell_amount
+--         , cumulative_upsell_amount * 1.25                                       as target_amount
+--     from
+--         base
+--     group by
+--         1
+--         , 2
+--         , 3
+--     )
+--    , final as (
+--     select
+--         base.full_site
+--         , base.company_name
+--         , base.wk
+--         , base.wk_num
+--         , base.yr
+--         , base.is_top_paying_company
+--         , base.customer_quarter_cohort
+--         , base.segment
+--         , base.industry
+--         , base.institution_type
+--         , base.number_of_employees
+--         , base.order_wk
+--         , base.upsell_wk
+--         , base.number_of_orders
+--         , base.total_amt
+--         , base.sales_order_numbers
+--         , base.number_of_items
+--         , base.order_count
+--         , base.cumulative_order_amt
+--         , base.upsell_count
+--         , base.cumulative_upsell_amt
+--         , target_values.target_amount
+--     from
+--         base
+--         left join target_values
+--             on base.wk_num = target_values.wk_num
+--     where target_values.target_amount is not null
+--     )
 select * from final

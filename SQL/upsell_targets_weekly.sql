@@ -3,10 +3,10 @@ Tracks every upsold customer's EC ordering over 365 days from CR order date.
 Cohorts are based on the quarter of the CR order.
  */
 
-use database da_prod_db;
-use schema analyst_reporting;
-
-create or replace view vw_upsell_targets_weekly as
+-- use database da_prod_db;
+-- use schema analyst_reporting;
+--
+-- create or replace view vw_upsell_targets as
 
 with total_spend as (
     /*
