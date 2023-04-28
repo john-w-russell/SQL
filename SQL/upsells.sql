@@ -5,10 +5,10 @@ Cohorts are based on the quarter of the CR order.
 Query is at the customer level.
  */
 
-use database da_prod_db;
-use schema analyst_reporting;
-
-create or replace view vw_upsells_weekly as
+-- use database da_prod_db;
+-- use schema analyst_reporting;
+--
+-- create or replace view vw_upsells_weekly as
 
 with total_spend as (
     /*
