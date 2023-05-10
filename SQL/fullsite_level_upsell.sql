@@ -100,15 +100,17 @@ with total_spend as (
    , sales_order_item_rollup as (
     select
         fnoi.buck_order_id
-        , lower(concat_ws(',', coalesce(ua.company_name, '')
-                             , coalesce(ua.city, '')
-                             , coalesce(ua.country, '')
-                             ))                           as buck_ship_to_account
-        , lower(coalesce(concat_ws(',', coalesce(fnoi.end_company_name, '')
-                             , coalesce(fnoi.ship_city, '')
-                             , coalesce(fnoi.ship_country, '')
-                             ), fnoi.company_name))       as fnoi_ship_to_account
-        , nvl(buck_ship_to_account, fnoi_ship_to_account) as full_site
+        , fnoi.full_site
+--         , lower(concat_ws(',', coalesce(ua.company_name, '')
+--                              , coalesce(ua.city, '')
+--                              , coalesce(ua.country, '')
+--                              ))                           as buck_ship_to_account
+--         , lower(coalesce(concat_ws(',', coalesce(fnoi.end_company_name, '')
+--                              , coalesce(fnoi.ship_city, '')
+--                              , coalesce(fnoi.ship_country, '')
+--                              ), fnoi.company_name))       as fnoi_ship_to_account
+--         , nvl(buck_ship_to_account, fnoi_ship_to_account) as full_site
+        , fnoi.customer_tier
         , row_number() over (partition by fnoi.buck_order_id
         order by fnoi.order_date)                         as rn
     from
@@ -117,10 +119,8 @@ with total_spend as (
             on ua.id = o.shipping_address_id
         left join datacore.fact_netsuite_order_items                            fnoi
             on o.id = fnoi.buck_order_id
-    where
-        fnoi_ship_to_account != ',,'
-        qualify
-            rn = 1
+    qualify
+        rn = 1
     )
    , customer_orders as (
     /*
@@ -134,10 +134,12 @@ with total_spend as (
         , sfo.id                                                                as salesforce_order_id
         , mode(sfa.id) over (partition by fbk.company_name)                     as salesforce_account_id
         , mode(sfa.name) over (partition by fbk.company_name)                   as salesforce_account_name
-        , mode(sfa.segment__c) over (partition by fbk.company_name)             as segment
+        , mode(sfa.segmentf__c) over (partition by fbk.company_name)            as segment
         , mode(sfa.industry) over (partition by fbk.company_name)               as industry
         , mode(sfa.institution_type__c) over (partition by fbk.company_name)    as institution_type
         , mode(sfa.numberofemployees) over (partition by fbk.company_name)      as number_of_employees
+        , mode(soi.customer_tier) over (partition by fbk.company_name)          as customer_tier
+        , mode(sfa.type__c) over (partition by fbk.company_name)                as company_type
         , fbk.order_date
         , iff(fbk.order_family = 'Engineered Cells', 'EC', 'CR')                as order_type
         , fbk.commerce_id_list
@@ -173,6 +175,8 @@ with total_spend as (
         , customer_orders.industry
         , customer_orders.institution_type
         , customer_orders.number_of_employees
+        , customer_orders.customer_tier
+        , customer_orders.company_type
         , customer_orders.first_order_at
         , customer_orders.first_cr_ordered_at
         , customer_orders.last_gko_order_at
@@ -202,6 +206,8 @@ with total_spend as (
         , 10
         , 11
         , 12
+        , 13
+        , 14
     )
    , customer_spine as (
     select
@@ -220,6 +226,8 @@ with total_spend as (
         , ord.industry
         , ord.institution_type
         , ord.number_of_employees
+        , ord.customer_tier
+        , ord.company_type
         , cust.first_cr_ordered_at
         , cust.last_gko_order_at
         , cust.first_ec_ordered_at
@@ -254,6 +262,8 @@ with total_spend as (
                 , customer_daily_rollup.industry
                 , customer_daily_rollup.institution_type
                 , customer_daily_rollup.number_of_employees
+                , customer_daily_rollup.customer_tier
+                , customer_daily_rollup.company_type
                 , customer_daily_rollup.order_date
                 , customer_daily_rollup.order_type
                 , customer_daily_rollup.list_sales_orders
@@ -293,6 +303,10 @@ with total_spend as (
             ignore nulls over (partition by full_site order by dte))            as institution_type
         , coalesce(number_of_employees, lag(number_of_employees)
             ignore nulls over (partition by full_site order by dte))            as number_of_employees
+         , coalesce(customer_tier, lag(customer_tier)
+            ignore nulls over (partition by full_site order by dte))            as customer_tier
+        , coalesce(company_type, lag(company_type)
+            ignore nulls over (partition by full_site order by dte))            as company_type
         , customer_spine.first_cr_ordered_at
         , customer_spine.last_gko_order_at                                      as upsell_target_date
         , customer_spine.first_ec_ordered_at
@@ -333,6 +347,8 @@ with total_spend as (
         , upsell_tracking.industry
         , upsell_tracking.institution_type
         , upsell_tracking.number_of_employees
+        , upsell_tracking.customer_tier
+        , upsell_tracking.company_type
         , upsell_tracking.first_cr_ordered_at
         , upsell_tracking.upsell_target_date
         , upsell_tracking.first_ec_ordered_at
@@ -395,6 +411,8 @@ with total_spend as (
         , cumulative_upsells.industry
         , cumulative_upsells.institution_type
         , cumulative_upsells.number_of_employees
+        , cumulative_upsells.customer_tier
+        , cumulative_upsells.company_type
         , cumulative_upsells.first_cr_ordered_at
         , cumulative_upsells.is_upsell_target
         , cumulative_upsells.upsell_target_date
@@ -430,6 +448,8 @@ with total_spend as (
         , 13
         , 14
         , 15
+        , 16
+        , 17
     )
 --    , target_values as (
 --     select
